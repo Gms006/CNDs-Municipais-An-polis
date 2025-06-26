@@ -222,7 +222,7 @@ def criar_diretorio_empresa(cnpj, empresas_dict):
     if MODO_TESTE:
         # Em modo teste, apenas criar pasta local
         base_dir = "certidoes"
-        diretorio = os.path.join(base_dir, nome_empresa, "PMA")
+        diretorio = os.path.join(base_dir, nome_empresa, "Societário", "PMA")
     else:
         # Em produção, procurar pasta da empresa existente dentro de DIRETORIO_BASE
         try:
@@ -250,17 +250,17 @@ def criar_diretorio_empresa(cnpj, empresas_dict):
                 # Se não encontrar correspondência aproximada, usar o nome original
                 if empresa_encontrada:
                     logger.info(f"[CONFIG] Pasta encontrada para empresa: {empresa_encontrada}")
-                    diretorio = os.path.join(DIRETORIO_BASE, empresa_encontrada, "PMA")
+                    diretorio = os.path.join(DIRETORIO_BASE, empresa_encontrada, "Societário", "PMA")
                 else:
                     logger.warning(f"[CONFIG] Pasta para empresa '{nome_empresa}' não encontrada, usando nome da planilha")
-                    diretorio = os.path.join(DIRETORIO_BASE, nome_empresa, "PMA")
+                    diretorio = os.path.join(DIRETORIO_BASE, nome_empresa, "Societário", "PMA")
             else:
                 logger.warning(f"[CONFIG] Diretório base {DIRETORIO_BASE} não encontrado")
-                diretorio = os.path.join(DIRETORIO_BASE, nome_empresa, "PMA")
+                diretorio = os.path.join(DIRETORIO_BASE, nome_empresa, "Societário", "PMA")
         except Exception as e:
             logger.warning(f"Erro ao buscar pasta da empresa: {e}")
             # Em caso de erro, usar o nome original
-            diretorio = os.path.join(DIRETORIO_BASE, nome_empresa, "PMA")
+            diretorio = os.path.join(DIRETORIO_BASE, nome_empresa, "Societário", "PMA")
     
     # Criar diretório se não existir
     os.makedirs(diretorio, exist_ok=True)
