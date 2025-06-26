@@ -1,0 +1,10 @@
+asyncio
+base64
+colorama
+datetime
+dotenv
+logging
+openpyxl
+playwright
+python-dotenv
+requests
