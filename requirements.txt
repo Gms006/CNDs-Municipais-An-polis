@@ -1,10 +1,5 @@
-asyncio
-base64
 colorama
-datetime
-dotenv
-logging
+python-dotenv
 openpyxl
 playwright
-python-dotenv
 requests
