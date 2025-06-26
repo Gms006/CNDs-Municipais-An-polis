@@ -509,7 +509,17 @@ async def emitir_certidao(page, cnpj, api_key, idx, total, empresas_dict):
         # Aguardar carregamento do resultado
         logger.info("[CONFIG] Aguardando carregamento da certidão...")
         await page.wait_for_load_state("networkidle", timeout=30000)
-        
+
+        # Verificar se um popup de erro de código de verificação apareceu
+        try:
+            popup = page.locator("div.swal2-popup:has-text('O código de verificação não confere')")
+            if await popup.count() > 0:
+                logger.warning("Código de verificação incorreto detectado")
+                await page.click('.swal2-confirm')
+                return False
+        except Exception as e_popup:
+            logger.debug(f"Falha ao verificar popup de código incorreto: {e_popup}")
+
         # Esperar um tempo adicional para garantir que a página carregou completamente
         await page.wait_for_timeout(5000)
         
