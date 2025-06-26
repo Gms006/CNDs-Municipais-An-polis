@@ -402,26 +402,38 @@ async def emitir_certidao(page, cnpj, api_key, idx, total, empresas_dict):
             resposta = resolver_captcha_2captcha(captcha_img, api_key)
             logger.info(f"[CONFIG] Preenchendo captcha com resposta: {resposta}")
             
-            # Preencher diretamente o campo de captcha usando seletor de ID específico
-            try:
-                # Tentar preencher diretamente usando o ID conhecido
-                await page.fill('input[id="66939"]', resposta)
-                logger.info("[CONFIG] Captcha preenchido pelo ID específico")
-            except Exception as e:
-                logger.warning(f"Erro ao preencher captcha por ID específico: {e}")
-                
-                # Se falhar, usar outros métodos
+            # Encontrar dinamicamente o campo de CAPTCHA próximo à imagem
+            captcha_field = None
+            captcha_input_selectors = [
+                'input[type="text"][value=""]:below(img[src*="captcha"])',
+                'input[type="text"][value=""]:right-of(img[src*="captcha"])',
+                'img[src*="captcha"] >> xpath=following::input[@type="text" and (@value="" or not(@value))][1]'
+            ]
+
+            for selector in captcha_input_selectors:
+                try:
+                    if await page.locator(selector).count() > 0:
+                        captcha_field = page.locator(selector).first
+                        await captcha_field.fill(resposta)
+                        break
+                except Exception as e_inner:
+                    logger.debug(f"Erro ao localizar campo do captcha com {selector}: {str(e_inner)}")
+
+            if not captcha_field:
+                # Fallback: procurar via JavaScript um campo de texto vazio próximo à imagem do CAPTCHA
                 captcha_input_found = await page.evaluate(f"""
                     (resposta) => {{
-                        const inputs = Array.from(document.querySelectorAll('input[type="text"]'));
-                        
-                        // Ignorar o input que já preenchemos com CNPJ
-                        const filledInputs = inputs.filter(input => !input.value.includes('.') && !input.value.includes('/'));
-                        
-                        // O captcha geralmente é um campo vazio próximo da imagem do captcha
-                        for (const input of filledInputs) {{
-                            // Se o campo estiver vazio, provavelmente é o captcha
-                            if (!input.value) {{
+                        const img = document.querySelector('img[src*="captcha"]');
+                        if (!img) return false;
+
+                        const candidates = Array.from(document.querySelectorAll('input[type="text"]')).filter(i => !i.value);
+                        const imgRect = img.getBoundingClientRect();
+
+                        for (const input of candidates) {{
+                            const rect = input.getBoundingClientRect();
+                            const nearVertically = rect.top >= imgRect.top - 50 && rect.top <= imgRect.bottom + 50;
+                            const nearHorizontally = Math.abs(rect.left - imgRect.left) < 300;
+                            if (nearVertically && nearHorizontally) {{
                                 input.focus();
                                 input.value = resposta;
                                 input.dispatchEvent(new Event('input', {{ bubbles: true }}));
@@ -429,68 +441,52 @@ async def emitir_certidao(page, cnpj, api_key, idx, total, empresas_dict):
                                 return true;
                             }}
                         }}
-                        return false;
-                    }}
-                """, resposta)
-                
-                if not captcha_input_found:
-                    # Tentar ainda mais seletores específicos
-                    captcha_input_selectors = [
-                        'input[maxlength="200"][type="text"]:not([value])',
-                        'input[type="text"]:below(img[src*="captcha"])'
-                    ]
-                    
-                    for selector in captcha_input_selectors:
-                        try:
-                            if await page.locator(selector).count() > 0:
-                                await page.fill(selector, resposta)
-                                break
-                        except Exception as e_inner:
-                            logger.debug(f"Erro ao preencher captcha com seletor {selector}: {str(e_inner)}")
-            
-            # Verificar se o captcha foi realmente preenchido antes de clicar no botão
-            captcha_preenchido = await page.evaluate("""
-                () => {
-                    // Tentar localizar pela ID específica
-                    const captchaInput = document.querySelector('input[id="66939"]');
-                    if (captchaInput && captchaInput.value) {
-                        return true;
-                    }
-                    
-                    // Verificar outros inputs de texto vazios
-                    const textInputs = Array.from(document.querySelectorAll('input[type="text"]'));
-                    return textInputs.some(input => input.value && 
-                                          !input.value.includes('.') && 
-                                          !input.value.includes('/'));
-                }
-            """)
-            
-            if not captcha_preenchido:
-                logger.warning("[CONFIG] CAPTCHA possivelmente não preenchido! Tentando novamente...")
-                # Último recurso - forçar preenchimento via JavaScript puro
-                await page.evaluate(f"""
-                    (resposta) => {{
-                        // Forçar preenchimento pela ID
-                        const captchaField = document.getElementById('66939');
-                        if (captchaField) {{
-                            captchaField.value = resposta;
-                            
-                            // Atualizar visualmente o campo
-                            const changeEvent = new Event('change', {{ bubbles: true }});
-                            const inputEvent = new Event('input', {{ bubbles: true }});
-                            captchaField.dispatchEvent(inputEvent);
-                            captchaField.dispatchEvent(changeEvent);
-                            
-                            // Forçar foco no campo
-                            captchaField.focus();
+
+                        if (candidates.length > 0) {{
+                            const input = candidates[0];
+                            input.focus();
+                            input.value = resposta;
+                            input.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                            input.dispatchEvent(new Event('change', {{ bubbles: true }}));
                             return true;
                         }}
                         return false;
                     }}
                 """, resposta)
-                
-                # Aguardar para garantir que a mudança foi refletida
-                await page.wait_for_timeout(2000)
+
+                if captcha_input_found:
+                    # Captcha foi preenchido via script
+                    captcha_field = None
+                else:
+                    logger.warning("Campo do CAPTCHA não encontrado")
+            
+            # Verificar se o captcha foi realmente preenchido antes de clicar no botão
+            if captcha_field:
+                captcha_preenchido = bool(await captcha_field.input_value())
+            else:
+                captcha_preenchido = await page.evaluate("""
+                    () => {
+                        const img = document.querySelector('img[src*="captcha"]');
+                        if (!img) return false;
+
+                        const inputs = Array.from(document.querySelectorAll('input[type="text"]'));
+                        const imgRect = img.getBoundingClientRect();
+
+                        return inputs.some(input => {
+                            if (!input.value) return false;
+                            const rect = input.getBoundingClientRect();
+                            const nearVertically = rect.top >= imgRect.top - 50 && rect.top <= imgRect.bottom + 50;
+                            const nearHorizontally = Math.abs(rect.left - imgRect.left) < 300;
+                            return nearVertically && nearHorizontally;
+                        });
+                    }
+                """)
+            
+            if not captcha_preenchido:
+                logger.warning("[CONFIG] CAPTCHA possivelmente não preenchido! Tentando novamente...")
+                if captcha_field:
+                    await captcha_field.fill(resposta)
+                    await page.wait_for_timeout(2000)
             
             # Agora sim, localizar e clicar no botão consultar via JavaScript
             await page.evaluate("""
