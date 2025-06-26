@@ -405,21 +405,24 @@ async def emitir_certidao(page, cnpj, api_key, idx, total, empresas_dict):
             # Encontrar dinamicamente o campo de CAPTCHA próximo à imagem
             captcha_field = None
             captcha_input_selectors = [
+                'img[src*="captcha"] + input[type="text"][value=""]',
+                'img[src*="captcha"] ~ input[type="text"][value=""]',
                 'input[type="text"][value=""]:below(img[src*="captcha"])',
-                'input[type="text"][value=""]:right-of(img[src*="captcha"])',
-                'img[src*="captcha"] >> xpath=following::input[@type="text" and (@value="" or not(@value))][1]'
+                'input[type="text"][value=""]:right-of(img[src*="captcha"])'
             ]
 
             for selector in captcha_input_selectors:
                 try:
-                    if await page.locator(selector).count() > 0:
-                        captcha_field = page.locator(selector).first
+                    locator = page.locator(selector)
+                    if await locator.count() > 0:
+                        captcha_field = locator.first
                         await captcha_field.fill(resposta)
-                        break
+                        if await captcha_field.input_value():
+                            break
                 except Exception as e_inner:
                     logger.debug(f"Erro ao localizar campo do captcha com {selector}: {str(e_inner)}")
 
-            if not captcha_field:
+            if not captcha_field or not await captcha_field.input_value():
                 # Fallback: procurar via JavaScript um campo de texto vazio próximo à imagem do CAPTCHA
                 captcha_input_found = await page.evaluate(f"""
                     (resposta) => {{
