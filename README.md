@@ -19,13 +19,19 @@ venv\Scripts\activate  # Windows
 pip install -r requirements.txt
 ```
 
-3. Crie um arquivo `.env` na raiz do projeto com sua chave da 2Captcha:
+3. Baixe os binários do navegador utilizados pelo Playwright:
+
+```bash
+playwright install
+```
+
+4. Crie um arquivo `.env` na raiz do projeto com sua chave da 2Captcha:
 
 ```env
 API_KEY_2CAPTCHA=sua_chave_aqui
 ```
 
-4. Verifique se os seguintes caminhos estão corretos (ajuste conforme necessidade):
+5. Verifique se os seguintes caminhos estão corretos (ajuste conforme necessidade):
 - Planilha de CNPJs: `G:/PMA/LISTA EMPRESAS - NETO CONTABILIDADE 2025.xlsm`
 - Diretório das empresas: `G:/EMPRESAS/`
 
