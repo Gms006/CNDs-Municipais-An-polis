@@ -1,0 +1,705 @@
+def verificar_saldo_2captcha(api_key):
+    """Verifica o saldo da conta 2captcha"""
+    try:
+        # API endpoint para verificar saldo
+        url = f"https://2captcha.com/res.php?key={api_key}&action=getbalance&json=1"
+        
+        # Fazer requisição para API
+        response = requests.get(url)
+        data = response.json()
+        
+        # Verificar se a requisição foi bem-sucedida
+        if data.get("status") == 1:
+            saldo = float(data.get("request"))
+            logger.info(f"[CONFIG] Saldo atual na conta 2Captcha: ${saldo:.2f}")
+            return saldo
+        else:
+            # Se houver erro, registrar o erro
+            logger.error(f"Erro ao verificar saldo da 2Captcha: {data.get('request')}")
+            return -1
+    except Exception as e:
+        logger.error(f"Erro ao conectar com a API da 2Captcha: {e}")
+        return -1
+        
+import asyncio
+import base64
+import json
+import os
+import time
+import re
+import logging
+import traceback
+from datetime import datetime
+from dotenv import load_dotenv
+from playwright.async_api import async_playwright, expect
+import requests
+import openpyxl
+import colorama
+from colorama import Fore, Back, Style
+
+# Inicializar colorama para funcionar em qualquer plataforma
+colorama.init()
+
+# Carregar variáveis de ambiente
+load_dotenv()
+
+# Configurações globais
+MODO_TESTE = False # Modo teste-> true= captcha manual, false= automático
+MODO_HEADLESS = False # Modo headless-> true= segundo plano, false= visível
+EXECUTABLE_PATH = "C:/Program Files/Google/Chrome/Application/chrome.exe"
+DIRETORIO_BASE = "G:/EMPRESAS/"
+PLANILHA_PATH = "G:/PMA/LISTA EMPRESAS - NETO CONTABILIDADE 2025.xlsm"
+LOG_PATH = f"G:/PMA/SCRIPTS/CNDs/logs/certidao_fiscal_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+ERROR_LOG_PATH = f"G:/PMA/SCRIPTS/CNDs/logs/erros_certidao_{datetime.now().strftime('%Y%m%d_%H%M%S')}.log"
+
+# Configuração de logging personalizada
+os.makedirs("logs", exist_ok=True)
+
+# Filtro personalizado para mensagens de terminal
+class TerminalLogFilter(logging.Filter):
+    def filter(self, record):
+        # Permitir mensagens de nível INFO ou maior para terminal
+        if record.levelno >= logging.INFO:
+            return True
+        return False
+
+# Formatador de logs para arquivo (detalhado)
+file_formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
+
+# Formatador para terminal (mais conciso e colorido)
+class ColoredFormatter(logging.Formatter):
+    def format(self, record):
+        # Formato base sem timestamp para o terminal
+        self._style._fmt = '%(message)s'
+        
+        # Adicionar cores baseadas no nível de log
+        if record.levelno >= logging.ERROR:
+            prefix = f"{Fore.RED}[✘] ERRO: "
+            suffix = Style.RESET_ALL
+        elif record.levelno >= logging.WARNING:
+            prefix = f"{Fore.YELLOW}[⚠] AVISO: "
+            suffix = Style.RESET_ALL
+        elif record.levelno >= logging.INFO:
+            # Adicionar formatação específica baseada em marcadores no log
+            if "[PROGRESSO]" in record.msg:
+                prefix = f"{Fore.CYAN}"
+                suffix = Style.RESET_ALL
+                record.msg = record.msg.replace("[PROGRESSO]", "")
+            elif "[SUCESSO]" in record.msg:
+                prefix = f"{Fore.GREEN}[✓] "
+                suffix = Style.RESET_ALL
+                record.msg = record.msg.replace("[SUCESSO]", "")
+            elif "[CONFIG]" in record.msg:
+                prefix = f"{Fore.BLUE}[⚙] "
+                suffix = Style.RESET_ALL
+                record.msg = record.msg.replace("[CONFIG]", "")
+            elif "[DOWNLOAD]" in record.msg:
+                prefix = f"{Fore.GREEN}[📄] "
+                suffix = Style.RESET_ALL
+                record.msg = record.msg.replace("[DOWNLOAD]", "")
+            elif "[INICIO]" in record.msg or "[FIM]" in record.msg:
+                prefix = f"{Fore.CYAN}{'=' * 50}\n"
+                suffix = f"\n{'=' * 50}{Style.RESET_ALL}"
+                record.msg = record.msg.replace("[INICIO]", "").replace("[FIM]", "")
+            else:
+                prefix = ""
+                suffix = Style.RESET_ALL
+        else:
+            prefix = ""
+            suffix = ""
+        
+        # Formatar com prefixo e sufixo coloridos
+        formatted_message = super().format(record)
+        return f"{prefix}{formatted_message}{suffix}"
+
+# Configurar handlers
+# 1. Handler para arquivo de log principal
+file_handler = logging.FileHandler(LOG_PATH, encoding='utf-8')
+file_handler.setLevel(logging.INFO)
+file_handler.setFormatter(file_formatter)
+
+# 2. Handler para arquivo de erros
+error_handler = logging.FileHandler(ERROR_LOG_PATH, encoding='utf-8')
+error_handler.setLevel(logging.ERROR)
+error_handler.setFormatter(file_formatter)
+
+# 3. Handler para console com formatação colorida
+console_handler = logging.StreamHandler()
+console_handler.setLevel(logging.INFO)
+console_handler.setFormatter(ColoredFormatter())
+console_handler.addFilter(TerminalLogFilter())
+
+# Configurar o logger principal
+logger = logging.getLogger()
+logger.setLevel(logging.INFO)
+logger.addHandler(file_handler)
+logger.addHandler(error_handler)
+logger.addHandler(console_handler)
+
+def carregar_variaveis_ambiente():
+    """Carrega variáveis de ambiente do arquivo .env"""
+    api_key = os.getenv("API_KEY_2CAPTCHA")
+    if not api_key:
+        logger.error("Verifique se API_KEY_2CAPTCHA está corretamente definido no .env")
+        raise ValueError("ERRO: Verifique se API_KEY_2CAPTCHA está corretamente definido no .env")
+    return api_key
+
+def resolver_captcha_2captcha(image_base64, api_key):
+    """Resolve captcha usando o serviço 2CAPTCHA"""
+    logger.info("[CONFIG] Enviando captcha para resolução com 2CAPTCHA")
+    url = "http://2captcha.com/in.php"
+    data = {'method': 'base64', 'key': api_key, 'body': image_base64, 'json': 1}
+    response = requests.post(url, data=data).json()
+    if response.get("status") != 1:
+        logger.error(f"Erro ao enviar captcha: {response}")
+        raise Exception("Erro ao enviar captcha")
+    
+    captcha_id = response["request"]
+    logger.info(f"[CONFIG] Captcha enviado com ID: {captcha_id}. Aguardando resolução...")
+    
+    for attempt in range(1, 21):
+        time.sleep(5)
+        res = requests.get(f"http://2captcha.com/res.php?key={api_key}&action=get&id={captcha_id}&json=1").json()
+        if res.get("status") == 1:
+            logger.info(f"[SUCESSO] Captcha resolvido")
+            return res["request"]
+        # Log detalhado apenas para arquivo, não para terminal
+        logging.getLogger().debug(f"Tentativa {attempt}/20: {res}")
+    
+    logger.error("Timeout na resolução do captcha")
+    raise Exception("Timeout na resolução do captcha")
+
+def carregar_cnpjs_da_planilha():
+    """Carrega lista de CNPJs da aba 'CNPJs' da planilha"""
+    try:
+        logger.info("[CONFIG] Carregando CNPJs da planilha...")
+        wb = openpyxl.load_workbook(PLANILHA_PATH, read_only=True, data_only=True)
+        sheet = wb["CNPJs"]
+        
+        cnpjs = []
+        empresas = {}
+        
+        for row in sheet.iter_rows(min_row=2):
+            if row[0].value and row[1].value:  # Nome da empresa (coluna A) e CNPJ (coluna B)
+                nome_empresa = str(row[0].value).strip()
+                cnpj = str(row[1].value).strip()
+                
+                # Normalizar CNPJ se necessário
+                if not re.match(r'\d{2}\.\d{3}\.\d{3}/\d{4}-\d{2}', cnpj):
+                    # Tenta formatar CNPJ numérico para o formato XX.XXX.XXX/XXXX-XX
+                    cnpj_limpo = re.sub(r'[^\d]', '', cnpj)
+                    if len(cnpj_limpo) == 14:
+                        cnpj = f"{cnpj_limpo[:2]}.{cnpj_limpo[2:5]}.{cnpj_limpo[5:8]}/{cnpj_limpo[8:12]}-{cnpj_limpo[12:]}"
+                
+                cnpjs.append(cnpj)
+                empresas[cnpj] = nome_empresa
+        
+        wb.close()
+        logger.info(f"[SUCESSO] {len(cnpjs)} CNPJs carregados da planilha")
+        return cnpjs, empresas
+    except Exception as e:
+        logger.error(f"Erro ao carregar CNPJs da planilha: {e}")
+        with open(ERROR_LOG_PATH, 'a', encoding='utf-8') as f:
+            f.write(f"\n\nErro ao carregar CNPJs da planilha:\n{traceback.format_exc()}")
+        raise
+
+def obter_nome_empresa_por_cnpj(cnpj, empresas_dict):
+    """Retorna o nome da empresa com base no CNPJ, considerando formatação."""
+    cnpj_limpo = re.sub(r'[^\d]', '', cnpj)
+
+    for cnpj_dict, nome in empresas_dict.items():
+        cnpj_dict_limpo = re.sub(r'[^\d]', '', cnpj_dict)
+        if cnpj_dict_limpo == cnpj_limpo:
+            return nome
+
+    return f"EMPRESA_{cnpj_limpo}"  # Nome genérico se não encontrar
+
+def criar_diretorio_empresa(cnpj, empresas_dict):
+    """Cria o diretório para salvar a certidão da empresa"""
+    nome_empresa = obter_nome_empresa_por_cnpj(cnpj, empresas_dict)
+    
+    # Criar o caminho base para as empresas
+    if MODO_TESTE:
+        # Em modo teste, apenas criar pasta local
+        base_dir = "certidoes"
+        diretorio = os.path.join(base_dir, nome_empresa, "PMA")
+    else:
+        # Em produção, procurar pasta da empresa existente dentro de DIRETORIO_BASE
+        try:
+            # Tentar encontrar a pasta da empresa baseada em uma busca aproximada
+            if os.path.exists(DIRETORIO_BASE):
+                empresas_existentes = [d for d in os.listdir(DIRETORIO_BASE) 
+                                    if os.path.isdir(os.path.join(DIRETORIO_BASE, d))]
+                
+                # Normalize o nome da empresa para comparação (remover espaços extras, maiúsculas/minúsculas)
+                nome_empresa_norm = re.sub(r'\s+', ' ', nome_empresa.lower().strip())
+                
+                # Procurar por correspondência aproximada
+                empresa_encontrada = None
+                def limpar_e_dividir(nome):
+                    return re.sub(r'[^\w\s]', '', nome).lower().split()
+
+                palavras_alvo = limpar_e_dividir(nome_empresa)[:4]
+
+                for empresa in empresas_existentes:
+                    palavras_pasta = limpar_e_dividir(empresa)
+                    if palavras_pasta[:len(palavras_alvo)] == palavras_alvo:
+                        empresa_encontrada = empresa
+                        break
+                
+                # Se não encontrar correspondência aproximada, usar o nome original
+                if empresa_encontrada:
+                    logger.info(f"[CONFIG] Pasta encontrada para empresa: {empresa_encontrada}")
+                    diretorio = os.path.join(DIRETORIO_BASE, empresa_encontrada, "PMA")
+                else:
+                    logger.warning(f"[CONFIG] Pasta para empresa '{nome_empresa}' não encontrada, usando nome da planilha")
+                    diretorio = os.path.join(DIRETORIO_BASE, nome_empresa, "PMA")
+            else:
+                logger.warning(f"[CONFIG] Diretório base {DIRETORIO_BASE} não encontrado")
+                diretorio = os.path.join(DIRETORIO_BASE, nome_empresa, "PMA")
+        except Exception as e:
+            logger.warning(f"Erro ao buscar pasta da empresa: {e}")
+            # Em caso de erro, usar o nome original
+            diretorio = os.path.join(DIRETORIO_BASE, nome_empresa, "PMA")
+    
+    # Criar diretório se não existir
+    os.makedirs(diretorio, exist_ok=True)
+    
+    logger.info(f"[CONFIG] Diretório para salvar certidão: {diretorio}")
+    return diretorio
+
+async def acessar_pagina_certidao(page):
+    """Acessa diretamente a página de certidão sem fazer login"""
+    logger.info("[CONFIG] Acessando página de certidão...")
+    
+    # Usar apenas a URL base, sempre
+    await page.goto("https://portaldocidadao.anapolis.go.gov.br/")
+    
+    # Aguardar carregamento inicial
+    await page.wait_for_load_state("networkidle")
+    
+    # Navegar para o menu de certidões
+    try:
+        # Hover sobre o menu "Certidões"
+        await page.hover("a.pure-menu-link:text('Certidões')")
+        
+        # Aguardar o submenu ficar visível
+        await page.wait_for_selector("a.pure-menu-link[data-navigation='7021']", timeout=10000)
+        
+        # Clicar no submenu "Certidão de Regularidade Fiscal do Contribuinte"
+        await page.click("a.pure-menu-link[data-navigation='7021']")
+        
+        # Aguardar carregamento da página
+        await page.wait_for_load_state("networkidle")
+        
+        logger.info("[SUCESSO] Página de emissão de certidão acessada")
+    except Exception as e:
+        logger.error(f"Erro ao acessar menu de certidões: {e}")
+        # Se não conseguir navegar pelo menu, o script será interrompido
+        raise Exception("Não foi possível acessar a página de emissão de certidão")
+
+async def emitir_certidao(page, cnpj, api_key, idx, total, empresas_dict):
+    """Emite e baixa a certidão para um CNPJ específico"""
+    try:
+        # Mostrar progresso
+        porcentagem = (idx / total) * 100
+        barra = f"[{Fore.GREEN}{'█' * int(porcentagem/5)}{Fore.WHITE}{'░' * (20 - int(porcentagem/5))}{Style.RESET_ALL}] {porcentagem:.1f}% ({idx}/{total})"
+        logger.info(f"[PROGRESSO] {barra}")
+        logger.info(f"Emitindo certidão para CNPJ {cnpj}")
+        
+        # Clicar no dropdown e selecionar CNPJ
+        try:
+            # Estratégia 2: Clicar diretamente no dropdown visível
+            await page.locator('span.select2-chosen, .select2-selection__rendered, [class*="select2"]:visible').first.click()
+            await page.wait_for_timeout(1000)  # Aguardar a reação do dropdown
+            
+            # Tentar clicar na opção CNPJ
+            cnpj_options = [
+                'li:has-text("CNPJ")',
+                '.select2-results__option:has-text("CNPJ")', 
+                'div.select2-result-label:has-text("CNPJ")', 
+                'div:has-text("CNPJ")'
+            ]
+            
+            for option in cnpj_options:
+                try:
+                    if await page.locator(option).count() > 0:
+                        await page.locator(option).first.click()
+                        logger.info("[CONFIG] Opção CNPJ selecionada com sucesso.")
+                        break
+                except Exception as e:
+                    logger.debug(f"Erro ao selecionar opção CNPJ {option}: {str(e)}")
+            
+        except Exception as e:
+            logger.warning(f"Erro ao selecionar CNPJ no dropdown: {e}")
+        
+        # Aguardar para garantir que a interface foi atualizada
+        await page.wait_for_timeout(2000)
+        
+        # Localizar e preencher o campo CNPJ via JavaScript
+        await page.evaluate(f"""
+            (cnpj) => {{
+                // Tentar encontrar o campo correto para CNPJ
+                const inputs = Array.from(document.querySelectorAll('input[type="text"]'));
+                let cnpjInput = null;
+                
+                // Procurar por input que pareça ser para CNPJ
+                for (const input of inputs) {{
+                    // Verificar por atributos ou elementos próximos
+                    if (input.placeholder && (input.placeholder.includes('CNPJ') || input.placeholder.includes('Informe'))) {{
+                        cnpjInput = input;
+                        break;
+                    }}
+                    
+                    // Verificar maxlength (CNPJ geralmente tem 18 caracteres com formatação)
+                    if (input.maxLength >= 14 && input.maxLength <= 18) {{
+                        cnpjInput = input;
+                    }}
+                }}
+                
+                // Se encontramos um input, preenchê-lo
+                if (cnpjInput) {{
+                    cnpjInput.focus();
+                    cnpjInput.value = cnpj;
+                    
+                    // Disparar eventos para garantir que o sistema reconheça a alteração
+                    cnpjInput.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                    cnpjInput.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                    
+                    return true;
+                }}
+                
+                return false;
+            }}
+        """, cnpj)
+        
+        logger.info(f"[CONFIG] CNPJ {cnpj} preenchido no formulário")
+        
+        # Resolver CAPTCHA para este CNPJ
+        if MODO_TESTE:
+            logger.info(f"{Fore.YELLOW}[CONFIG] MODO TESTE: Resolva o CAPTCHA manualmente no navegador.{Style.RESET_ALL}")
+            input(f"{Fore.YELLOW}✅ Quando terminar, clique em 'Consultar' no site e depois aperte ENTER aqui para continuar...{Style.RESET_ALL}")
+        else:
+            # Localizar a imagem do captcha
+            captcha_selectors = [
+                "img.step-img", 
+                "img[src*='captcha.action']",
+                "img[alt*='captcha']",
+                "img[src*='captcha']"
+            ]
+            
+            captcha_element = None
+            for selector in captcha_selectors:
+                if await page.locator(selector).count() > 0:
+                    captcha_element = page.locator(selector).first
+                    break
+            
+            if not captcha_element:
+                raise Exception("Não foi possível encontrar a imagem do CAPTCHA")
+                
+            captcha_bytes = await captcha_element.screenshot()
+            captcha_img = base64.b64encode(captcha_bytes).decode("utf-8")
+            resposta = resolver_captcha_2captcha(captcha_img, api_key)
+            logger.info(f"[CONFIG] Preenchendo captcha com resposta: {resposta}")
+            
+            # Preencher diretamente o campo de captcha usando seletor de ID específico
+            try:
+                # Tentar preencher diretamente usando o ID conhecido
+                await page.fill('input[id="66939"]', resposta)
+                logger.info("[CONFIG] Captcha preenchido pelo ID específico")
+            except Exception as e:
+                logger.warning(f"Erro ao preencher captcha por ID específico: {e}")
+                
+                # Se falhar, usar outros métodos
+                captcha_input_found = await page.evaluate(f"""
+                    (resposta) => {{
+                        const inputs = Array.from(document.querySelectorAll('input[type="text"]'));
+                        
+                        // Ignorar o input que já preenchemos com CNPJ
+                        const filledInputs = inputs.filter(input => !input.value.includes('.') && !input.value.includes('/'));
+                        
+                        // O captcha geralmente é um campo vazio próximo da imagem do captcha
+                        for (const input of filledInputs) {{
+                            // Se o campo estiver vazio, provavelmente é o captcha
+                            if (!input.value) {{
+                                input.focus();
+                                input.value = resposta;
+                                input.dispatchEvent(new Event('input', {{ bubbles: true }}));
+                                input.dispatchEvent(new Event('change', {{ bubbles: true }}));
+                                return true;
+                            }}
+                        }}
+                        return false;
+                    }}
+                """, resposta)
+                
+                if not captcha_input_found:
+                    # Tentar ainda mais seletores específicos
+                    captcha_input_selectors = [
+                        'input[maxlength="200"][type="text"]:not([value])',
+                        'input[type="text"]:below(img[src*="captcha"])'
+                    ]
+                    
+                    for selector in captcha_input_selectors:
+                        try:
+                            if await page.locator(selector).count() > 0:
+                                await page.fill(selector, resposta)
+                                break
+                        except Exception as e_inner:
+                            logger.debug(f"Erro ao preencher captcha com seletor {selector}: {str(e_inner)}")
+            
+            # Verificar se o captcha foi realmente preenchido antes de clicar no botão
+            captcha_preenchido = await page.evaluate("""
+                () => {
+                    // Tentar localizar pela ID específica
+                    const captchaInput = document.querySelector('input[id="66939"]');
+                    if (captchaInput && captchaInput.value) {
+                        return true;
+                    }
+                    
+                    // Verificar outros inputs de texto vazios
+                    const textInputs = Array.from(document.querySelectorAll('input[type="text"]'));
+                    return textInputs.some(input => input.value && 
+                                          !input.value.includes('.') && 
+                                          !input.value.includes('/'));
+                }
+            """)
+            
+            if not captcha_preenchido:
+                logger.warning("[CONFIG] CAPTCHA possivelmente não preenchido! Tentando novamente...")
+                # Último recurso - forçar preenchimento via JavaScript puro
+                await page.evaluate(f"""
+                    (resposta) => {{
+                        // Forçar preenchimento pela ID
+                        const captchaField = document.getElementById('66939');
+                        if (captchaField) {{
+                            captchaField.value = resposta;
+                            
+                            // Atualizar visualmente o campo
+                            const changeEvent = new Event('change', {{ bubbles: true }});
+                            const inputEvent = new Event('input', {{ bubbles: true }});
+                            captchaField.dispatchEvent(inputEvent);
+                            captchaField.dispatchEvent(changeEvent);
+                            
+                            // Forçar foco no campo
+                            captchaField.focus();
+                            return true;
+                        }}
+                        return false;
+                    }}
+                """, resposta)
+                
+                # Aguardar para garantir que a mudança foi refletida
+                await page.wait_for_timeout(2000)
+            
+            # Agora sim, localizar e clicar no botão consultar via JavaScript
+            await page.evaluate("""
+                () => {
+                    const buttons = Array.from(document.querySelectorAll('input[type="button"], button'));
+                    for (const btn of buttons) {
+                        if (btn.value && btn.value.includes('Consultar') || 
+                            btn.textContent && btn.textContent.includes('Consultar')) {
+                            btn.click();
+                            return true;
+                        }
+                    }
+                    return false;
+                }
+            """)
+        
+        # Aguardar carregamento do resultado
+        logger.info("[CONFIG] Aguardando carregamento da certidão...")
+        await page.wait_for_load_state("networkidle", timeout=30000)
+        
+        # Esperar um tempo adicional para garantir que a página carregou completamente
+        await page.wait_for_timeout(5000)
+        
+        # Criar diretório para salvar a certidão
+        diretorio_destino = criar_diretorio_empresa(cnpj, empresas_dict)
+        
+        # Não vamos tentar encontrar o elemento, vamos direto para o download
+        logger.info("[CONFIG] Tentando baixar certidão...")
+        
+        # Detectar e clicar no ícone de download com JavaScript
+        download_click_success = await page.evaluate("""
+            () => {
+                // Procurar todos os elementos que possam ser botões de download
+                const downloadElements = [
+                    ...document.querySelectorAll('img[src*="download"]'),
+                    ...document.querySelectorAll('a[href*="download"]'),
+                    ...document.querySelectorAll('button[title*="Download"]'),
+                    ...document.querySelectorAll('i[class*="download"]')
+                ];
+                
+                if (downloadElements.length > 0) {
+                    downloadElements[0].click();
+                    return true;
+                }
+                
+                // Procurar qualquer elemento que tenha 'download' em seu conteúdo
+                const elements = document.evaluate(
+                    "//*[contains(@src, 'download') or contains(@href, 'download') or contains(@class, 'download') or contains(@title, 'download')]",
+                    document,
+                    null,
+                    XPathResult.ORDERED_NODE_SNAPSHOT_TYPE,
+                    null
+                );
+                
+                if (elements.snapshotLength > 0) {
+                    elements.snapshotItem(0).click();
+                    return true;
+                }
+                
+                return false;
+            }
+        """)
+            
+        if download_click_success:
+            # Se clicou com sucesso, aguardar o download
+            try:
+                async with page.expect_download(timeout=30000) as download_info:
+                    download = await download_info.value
+                    
+                    # Gerar nome do arquivo com data no formato dd.mm.aaaa
+                    data_atual = datetime.now().strftime("%d.%m.%Y")
+                    nome_arquivo = f"CND - {data_atual}.pdf"
+                    
+                    # Caminho completo para salvar o arquivo
+                    caminho_arquivo = os.path.join(diretorio_destino, nome_arquivo)
+                    
+                    # Salvar o arquivo baixado
+                    await download.save_as(caminho_arquivo)
+                    
+                    logger.info(f"[DOWNLOAD] Certidão salva em: {caminho_arquivo}")
+                    return True
+            except Exception as e:
+                logger.error(f"Erro ao aguardar download após clique via JavaScript: {str(e)}")
+        else:
+            logger.error("Não foi possível localizar ou acionar o botão de download da certidão")
+            
+        return False
+        
+    except Exception as e:
+        logger.error("Erro ao emitir certidão para CNPJ %s: %s", cnpj, str(e))
+        with open(ERROR_LOG_PATH, 'a', encoding='utf-8') as f:
+            f.write(f"\n\nErro ao emitir certidão para CNPJ {cnpj}:\n{traceback.format_exc()}")
+        return False
+
+async def processar_cnpjs(page, cnpjs, api_key, empresas_dict):
+    """Processa a lista de CNPJs, emitindo certidões para cada um deles"""
+    total = len(cnpjs)
+    sucessos = 0
+    falhas = 0
+    
+    logger.info(f"Iniciando processamento de {total} CNPJs")
+    
+    # Verificar e criar diretório base para certidões em modo teste
+    if MODO_TESTE:
+        os.makedirs("certidoes", exist_ok=True)
+    
+    # Acessar a página de certidão uma única vez no início
+    await acessar_pagina_certidao(page)
+    
+    for idx, cnpj in enumerate(cnpjs, start=1):
+        try:
+            # Tentar emitir a certidão para o CNPJ atual
+            if await emitir_certidao(page, cnpj, api_key, idx, total, empresas_dict):
+                logger.info(f"[SUCESSO] Certidão emitida para CNPJ {cnpj}")
+                sucessos += 1
+            else:
+                logger.warning(f"Falha ao emitir certidão para CNPJ {cnpj}")
+                falhas += 1
+                
+            # Voltar à página de certidão para o próximo CNPJ
+            if idx < total:
+                await acessar_pagina_certidao(page)
+                
+        except Exception as e:
+            erro_msg = str(e).split('\n')[0]
+            logger.error(f"CNPJ {cnpj} – Falha: {erro_msg}")
+            falhas += 1
+            
+            # Tentar acessar a página novamente para o próximo CNPJ
+            if idx < total:
+                try:
+                    await acessar_pagina_certidao(page)
+                except Exception as nav_err:
+                    logger.error(f"Falha ao retornar à página de certidão: {nav_err}")
+                    with open(ERROR_LOG_PATH, 'a', encoding='utf-8') as f:
+                        f.write(f"\n\nFalha ao voltar à página de certidão:\n{traceback.format_exc()}")
+    
+    # Resumo final com estatísticas
+    taxa_sucesso = (sucessos / total) * 100 if total > 0 else 0
+    logger.info(f"""
+{Fore.CYAN}{'=' * 70}{Style.RESET_ALL}
+{Fore.GREEN}✅ PROCESSAMENTO FINALIZADO{Style.RESET_ALL}
+
+{Fore.CYAN}📊 RESUMO ESTATÍSTICO:{Style.RESET_ALL}
+  • Total de CNPJs processados: {total}
+  • Certidões emitidas com sucesso: {sucessos} ({taxa_sucesso:.1f}%)
+  • Falhas: {falhas}
+{Fore.CYAN}{'=' * 70}{Style.RESET_ALL}
+""")
+    
+    return sucessos, falhas
+
+async def main():
+    # Carregar variáveis e dados necessários
+    logger.info("[INICIO] EMISSÃO DE CERTIDÕES DE REGULARIDADE FISCAL")
+    
+    try:
+        API_KEY = carregar_variaveis_ambiente()
+        
+        # Carregar CNPJs da planilha
+        cnpjs, empresas_dict = carregar_cnpjs_da_planilha()
+        
+        # Verificação de saldo 2Captcha
+        if not MODO_TESTE:
+            saldo_disponivel = verificar_saldo_2captcha(API_KEY)
+            if saldo_disponivel == -1:
+                raise Exception("Não foi possível verificar o saldo da 2Captcha.")
+    
+        if saldo_disponivel < 0.01:  # Definindo um mínimo simbólico só pra não estar zerado
+            raise Exception(f"Saldo muito baixo na 2Captcha: apenas ${saldo_disponivel:.2f}")
+    
+        logger.info(f"[CONFIG] Saldo suficiente: ${saldo_disponivel:.2f} disponível para {len(cnpjs)} CNPJs")
+        
+        logger.info("[CONFIG] Configurações carregadas")
+        logger.debug(f"API_KEY: {API_KEY[:4] + '...' if API_KEY else None}")
+        logger.info(f"{Fore.CYAN}• CNPJs a processar: {len(cnpjs)}{Style.RESET_ALL}")
+        logger.info(f"{Fore.BLUE}• Modo teste: {'ATIVADO' if MODO_TESTE else 'DESATIVADO'}{Style.RESET_ALL}")
+        
+        async with async_playwright() as p:
+            browser = await p.chromium.launch(headless=MODO_HEADLESS, executable_path=EXECUTABLE_PATH)
+            context = await browser.new_context(ignore_https_errors=True)
+            page = await context.new_page()
+            
+            logger.info("[PROGRESSO] Iniciando emissão de certidões")
+            await processar_cnpjs(page, cnpjs, API_KEY, empresas_dict)
+            
+            logger.info("Finalizando navegação...")
+            await context.close()
+            await browser.close()
+        
+        logger.info("[FIM] SCRIPT FINALIZADO COM SUCESSO")
+        
+    except Exception as e:
+        erro_msg = str(e).split('\n')[0]
+        logger.error(f"Erro crítico durante a execução: {erro_msg}")
+        with open(ERROR_LOG_PATH, 'a', encoding='utf-8') as f:
+            f.write(f"\n\nErro crítico durante a execução:\n{traceback.format_exc()}")
+        logger.error("[FIM] SCRIPT FINALIZADO COM ERROS")
+
+if __name__ == "__main__":
+    try:
+        # Imprimir cabeçalho colorido
+        print(f"""
+{Fore.CYAN}{'=' * 70}
+{Fore.CYAN}█▀▀ █▀▀ █▀█ ▀█▀ █ █▀▄ ▄▀█ █▀█   █▀▀ █ █▀ █▀▀ ▄▀█ █░░
+{Fore.CYAN}█▄▄ ██▄ █▀▄ ░█░ █ █▄▀ █▀█ █▄█   █▀░ █ ▄█ █▄▄ █▀█ █▄▄
+{Fore.CYAN}{'=' * 70}{Style.RESET_ALL}
+""")
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        logger.warning(f"{Fore.YELLOW}[!] Programa interrompido pelo usuário{Style.RESET_ALL}")
+        logger.info("[FIM] SCRIPT FINALIZADO MANUALMENTE")
